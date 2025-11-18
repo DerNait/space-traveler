@@ -30,16 +30,18 @@ impl Framebuffer {
         }
     }
 
-    pub fn point(&mut self, x: usize, y: usize, depth: f32) {
+    /// Versión optimizada: recibe el color directamente
+    pub fn point(&mut self, x: usize, y: usize, depth: f32, color: u32) {
         if x < self.width && y < self.height {
             let index = y * self.width + x;
             if self.zbuffer[index] > depth {
-                self.buffer[index] = self.current_color;
+                self.buffer[index] = color;
                 self.zbuffer[index] = depth;
             }
         }
     }
 
+    // Estas las dejo por compatibilidad, por si las usas en otro lado
     pub fn set_background_color(&mut self, color: u32) {
         self.background_color = color;
     }

@@ -7,7 +7,7 @@ use crate::color::Color;
 pub fn _triangle(v1: &Vertex, v2: &Vertex, v3: &Vertex) -> Vec<Fragment> {
     let mut fragments = Vec::new();
 
-    // Draw the three sides of the triangle
+    // Draw the three sides of the triangle (modo wireframe)
     fragments.extend(line(v1, v2));
     fragments.extend(line(v2, v3));
     fragments.extend(line(v3, v1));
@@ -15,20 +15,38 @@ pub fn _triangle(v1: &Vertex, v2: &Vertex, v3: &Vertex) -> Vec<Fragment> {
     fragments
 }
 
-pub fn triangle(v1: &Vertex, v2: &Vertex, v3: &Vertex) -> Vec<Fragment> {
+/// Rasteriza un triángulo **clipeando la bounding box al tamaño de la pantalla**
+pub fn triangle(
+    v1: &Vertex,
+    v2: &Vertex,
+    v3: &Vertex,
+    screen_width: i32,
+    screen_height: i32,
+) -> Vec<Fragment> {
     let mut fragments = Vec::new();
     let (a, b, c) = (v1.transformed_position, v2.transformed_position, v3.transformed_position);
 
-    let (min_x, min_y, max_x, max_y) = calculate_bounding_box(&a, &b, &c);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = calculate_bounding_box(&a, &b, &c);
+
+    // Si el triángulo está completamente fuera de la pantalla, salimos rápido
+    if max_x < 0 || max_y < 0 || min_x >= screen_width || min_y >= screen_height {
+        return fragments;
+    }
+
+    // Clamp de la bounding box a los límites del framebuffer
+    if min_x < 0 { min_x = 0; }
+    if min_y < 0 { min_y = 0; }
+    if max_x >= screen_width { max_x = screen_width - 1; }
+    if max_y >= screen_height { max_y = screen_height - 1; }
 
     let light_dir = Vec3::new(0.0, 0.0, -1.0);
 
     let triangle_area = edge_function(&a, &b, &c);
     if triangle_area.abs() < 1e-6 {
-        return fragments; // evita degenerate
+        return fragments; // evita triángulo degenerado
     }
 
-    // Iterate over each pixel in the bounding box
+    // Iterate over each pixel in the (clipped) bounding box
     for y in min_y..=max_y {
         for x in min_x..=max_x {
             let point = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, 0.0);
@@ -51,7 +69,7 @@ pub fn triangle(v1: &Vertex, v2: &Vertex, v3: &Vertex) -> Vec<Fragment> {
                 // Calculate lighting intensity
                 let intensity = dot(&normal, &light_dir).abs();
 
-                let base_color = Color::new(92,145,80);
+                let base_color = Color::new(92, 145, 80);
                 let lit_color = base_color * intensity;
 
                 // Interpolate depth (z)
@@ -74,7 +92,13 @@ fn calculate_bounding_box(v1: &Vec3, v2: &Vec3, v3: &Vec3) -> (i32, i32, i32, i3
     (min_x, min_y, max_x, max_y)
 }
 
-fn barycentric_coordinates(p: &Vec3, a: &Vec3, b: &Vec3, c: &Vec3, area: f32) -> (f32, f32, f32) {
+fn barycentric_coordinates(
+    p: &Vec3,
+    a: &Vec3,
+    b: &Vec3,
+    c: &Vec3,
+    area: f32,
+) -> (f32, f32, f32) {
     let w1 = edge_function(b, c, p) / area;
     let w2 = edge_function(c, a, p) / area;
     let w3 = edge_function(a, b, p) / area;

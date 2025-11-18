@@ -1,8 +1,13 @@
+// shaders.rs
 use nalgebra_glm::{Vec3, Vec4, Mat3};
 use crate::vertex::Vertex;
 use crate::Uniforms;
 
-pub fn vertex_shader(vertex: &Vertex, uniforms: &Uniforms) -> Vertex {
+/// Vertex shader:
+/// - Usa depth = -view_pos.z (distancia en espacio de vista)
+/// - Hace culling solo para vértices detrás de la cámara (z >= 0)
+/// - Sin culling agresivo por NDC (dejamos que el triangle+clipping hagan su trabajo)
+pub fn vertex_shader(vertex: &Vertex, uniforms: &Uniforms) -> Option<Vertex> {
     // Posición original del vértice
     let position = Vec4::new(
         vertex.position.x,
@@ -17,27 +22,36 @@ pub fn vertex_shader(vertex: &Vertex, uniforms: &Uniforms) -> Vertex {
     // ===== Espacio de vista (cámara) =====
     let view_pos = uniforms.view_matrix * world_pos;
 
-    // ===== Profundidad para el z-buffer =====
-    // Suponiendo que la cámara mira hacia -Z en espacio de vista,
-    // usamos la distancia positiva a lo largo de ese eje.
-    let depth = -view_pos.z;
+    // Con look_at RH, lo que está frente a la cámara tiene z < 0.
+    // Todo lo que queda en z >= 0 está detrás o en el ojo -> lo descartamos.
+    if view_pos.z >= 0.0 {
+        return None;
+    }
 
     // ===== Proyección en clip space =====
     let clip_pos = uniforms.projection_matrix * view_pos;
-
     let w = clip_pos.w;
+
+    // Evitar divisiones locas cuando w es casi 0
+    if w.abs() < 1e-5 {
+        return None;
+    }
+
+    // NDC (no hacemos culling, solo los usamos para pasar a pantalla)
     let ndc_x = clip_pos.x / w;
     let ndc_y = clip_pos.y / w;
-    // ndc_z se podría usar si quieres algo más “canónico”, pero aquí usamos depth.
+    // ndc_z no lo usamos para culling ni para depth
 
     // ===== Viewport transform: NDC [-1,1] -> píxeles =====
     let half_w = uniforms.screen_width * 0.5;
     let half_h = uniforms.screen_height * 0.5;
 
-    // x: -1 -> 0, 1 -> width
     let screen_x = ndc_x * half_w + half_w;
-    // y: -1 -> height, 1 -> 0 (invertimos eje Y de pantalla)
     let screen_y = -ndc_y * half_h + half_h;
+
+    // ===== Depth en espacio de vista =====
+    // -view_pos.z es positivo y crece con la distancia, ideal para tu z-buffer
+    let depth = -view_pos.z;
 
     // ===== Normal transform =====
     let model_mat3 = Mat3::new(
@@ -53,12 +67,12 @@ pub fn vertex_shader(vertex: &Vertex, uniforms: &Uniforms) -> Vertex {
 
     let transformed_normal = normal_matrix * vertex.normal;
 
-    Vertex {
+    Some(Vertex {
         position: vertex.position,
         normal: vertex.normal,
         tex_coords: vertex.tex_coords,
         color: vertex.color,
         transformed_position: Vec3::new(screen_x, screen_y, depth),
         transformed_normal,
-    }
+    })
 }
