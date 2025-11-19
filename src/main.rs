@@ -247,19 +247,31 @@ fn main() {
 
             if planet.has_rings {
                 if let Some(ring_idx) = planet.ring_shader_index {
-                     if let Some(ring_shader) = &scene_data.ring_shaders[ring_idx] {
-                        let ring_model = create_model_matrix(translation + planet_offset * planet.scale, scale_final * 1.2, planet.ring_tilt);
+                    if let Some(ring_shader) = &scene_data.ring_shaders[ring_idx] {
+                        // 1. Calculamos una nueva rotación combinando el tilt original con el tiempo
+                        // time_secs * 0.05 hace que giren despacio sobre su eje Y (yaw)
+                        let animated_ring_rot = Vec3::new(
+                            planet.ring_tilt.x, 
+                            planet.ring_tilt.y + time_secs * 0.5, 
+                            planet.ring_tilt.z
+                        );
+
+                        // 2. Usamos esa rotación animada en la matriz
+                        let ring_model = create_model_matrix(
+                            translation + planet_offset * planet.scale, 
+                            scale_final * 1.2, 
+                            animated_ring_rot // <--- CAMBIO AQUÍ
+                        );
                         
-                        // --- CORRECCIÓN EN EL UNIFORM DEL ANILLO ---
                         let u_rings = Uniforms { 
                             model_matrix: ring_model, 
                             ring_a: ring_radius_x, 
-                            ring_b: ring_radius_z, // USAR EL RADIO Z
+                            ring_b: ring_radius_z, 
                             ring_plane_xy: false, 
                             ..uniforms 
                         };
                         render(&mut framebuffer, &u_rings, &rings_obj, &**ring_shader);
-                     }
+                    }
                 }
             }
 
