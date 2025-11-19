@@ -20,7 +20,7 @@ impl Camera {
             fov_y: std::f32::consts::FRAC_PI_3, // ~60°
             aspect,
             z_near: 0.1,
-            z_far: 1000.0,
+            z_far: 2000.0,
         }
     }
 

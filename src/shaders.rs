@@ -3,6 +3,7 @@ use nalgebra_glm::{Vec2, Vec3, Mat3, Mat4, Vec4, dot};
 use crate::vertex::Vertex;
 use crate::color::Color;
 use crate::noise;
+use crate::texture::Texture;
 
 pub struct Uniforms {
     pub model_matrix: Mat4,
@@ -344,3 +345,77 @@ fn alpha_from_noise(n: f32, mode: &AlphaMode) -> f32 {
         }
     }
 }
+
+pub struct SkyboxShader<'a> {
+    pub tex_pos_x: &'a Texture,
+    pub tex_neg_x: &'a Texture,
+    pub tex_pos_y: &'a Texture,
+    pub tex_negy_y: &'a Texture,
+    pub tex_pos_z: &'a Texture,
+    pub tex_neg_z: &'a Texture,
+}
+
+impl<'a> FragmentShader for SkyboxShader<'a> {
+    fn shade(&self, frag: &FragAttrs, _uniforms: &Uniforms) -> (Color, f32) {
+        // Para un skybox, la "posición del objeto" interpolada es básicamente
+        // el vector dirección desde el centro de la cámara hacia el píxel.
+        let dir = frag.obj_pos; 
+        
+        let abs_x = dir.x.abs();
+        let abs_y = dir.y.abs();
+        let abs_z = dir.z.abs();
+
+        let mut u = 0.0;
+        let mut v = 0.0;
+        let texture;
+
+        // Algoritmo estándar de Cubemapping: determinar cara dominante
+        if abs_x >= abs_y && abs_x >= abs_z {
+            // Eje X dominante
+            if dir.x > 0.0 {
+                texture = self.tex_pos_x;
+                u = -dir.z / abs_x;
+                v = dir.y / abs_x;
+            } else {
+                texture = self.tex_neg_x;
+                u = dir.z / abs_x;
+                v = dir.y / abs_x;
+            }
+        } else if abs_y >= abs_x && abs_y >= abs_z {
+            // Eje Y dominante
+            if dir.y > 0.0 {
+                texture = self.tex_pos_y;
+                u = dir.x / abs_y;
+                v = -dir.z / abs_y; // A veces hay que invertir Z dependiendo del asset
+            } else {
+                texture = self.tex_negy_y;
+                u = dir.x / abs_y;
+                v = dir.z / abs_y;
+            }
+        } else {
+            // Eje Z dominante
+            if dir.z > 0.0 {
+                texture = self.tex_pos_z;
+                u = dir.x / abs_z;
+                v = dir.y / abs_z;
+            } else {
+                texture = self.tex_neg_z;
+                u = -dir.x / abs_z;
+                v = dir.y / abs_z;
+            }
+        }
+
+        // Convertir rango [-1, 1] a [0, 1]
+        u = (u + 1.0) * 0.5;
+        v = (v + 1.0) * 0.5;
+        
+        // Invertir V si la imagen sale de cabeza (común en texturas)
+        v = 1.0 - v; 
+
+        let color = texture.get_color(u, v);
+        
+        // El skybox siempre es opaco (alpha 1.0)
+        (color, 1.0)
+    }
+}
+

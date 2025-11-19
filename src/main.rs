@@ -13,7 +13,9 @@ mod fragment;
 mod shaders;
 mod camera;
 mod noise; 
-mod scene; 
+mod scene;
+mod texture;
+use texture::Texture; 
 
 use framebuffer::Framebuffer;
 use vertex::Vertex;
@@ -26,6 +28,7 @@ use shaders::{
 use camera::Camera;
 use color::Color;
 use scene::{create_solar_system, SceneData};
+use shaders::SkyboxShader;
 
 // ... (Funciones create_model_matrix, render_orbit, render, render_alpha IGUALES que antes) ...
 // ... Copia las funciones create_model_matrix, render_orbit, render, render_alpha tal cual ...
@@ -102,10 +105,10 @@ fn render_alpha(framebuffer: &mut Framebuffer, uniforms: &Uniforms, obj: &Obj, s
 // ===================== MAIN =====================
 
 fn main() {
-    let window_width = 800;
-    let window_height = 600;
-    let framebuffer_width = 800;
-    let framebuffer_height = 600;
+    let window_width = 1300;
+    let window_height = 800;
+    let framebuffer_width = 1300;
+    let framebuffer_height = 800;
     let frame_delay = Duration::from_millis(16);
 
     let mut framebuffer = Framebuffer::new(framebuffer_width, framebuffer_height);
@@ -118,6 +121,14 @@ fn main() {
     let planet_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load planet");
     let rings_obj = Obj::load("assets/models/PlanetRing.obj").expect("Failed to load rings");
     let moon_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load moon");
+
+    let skybox_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load skybox cube");
+    let t_posx = Texture::load("assets/skybox/posx.png");
+    let t_negx = Texture::load("assets/skybox/negx.png");
+    let t_posy = Texture::load("assets/skybox/posy.png");
+    let t_negy = Texture::load("assets/skybox/negy.png");
+    let t_posz = Texture::load("assets/skybox/negz.png");
+    let t_negz = Texture::load("assets/skybox/posz.png");
 
     // 2. Cálculos de Escala
     let (min_v, max_v) = ship_obj.bounds();
@@ -202,6 +213,38 @@ fn main() {
         framebuffer.clear();
         let view_matrix = camera.view_matrix();
         let projection_matrix = camera.projection_matrix();
+
+        // El Skybox sigue a la cámara para que nunca llegues al borde.
+        // Usamos la posición de la cámara pero NO su rotación en el modelo.
+        // La rotación la maneja la ViewMatrix.
+        let skybox_pos = camera.position;
+        
+        // Hacemos el cubo GIGANTE para que cubra todo (dentro del z_far de la cámara)
+        // z_far es 1000.0, así que 500.0 es seguro.
+        let skybox_scale = -1500.0; 
+        
+        // IMPORTANTE: Escala NEGATIVA en uno de los ejes o en todos para 
+        // invertir las normales si usamos backface culling, ya que estamos DENTRO del cubo.
+        // O simplemente asegurarnos de que el shader pinte siempre.
+        // Probemos escala positiva grande primero. Si no se ve, usa -500.0.
+        let skybox_model = create_model_matrix(skybox_pos, skybox_scale, Vec3::new(0.0, 0.0, 0.0));
+        
+        let skybox_uniforms = Uniforms {
+            model_matrix: skybox_model,
+            view_matrix,
+            projection_matrix,
+            screen_width: framebuffer_width as f32,
+            screen_height: framebuffer_height as f32,
+            time: 0.0, seed: 0, ring_a: 0.0, ring_b: 0.0, ring_plane_xy: false
+        };
+
+        let skybox_shader_instance = SkyboxShader {
+            tex_pos_x: &t_posx, tex_neg_x: &t_negx,
+            tex_pos_y: &t_posy, tex_negy_y: &t_negy,
+            tex_pos_z: &t_posz, tex_neg_z: &t_negz,
+        };
+
+        render(&mut framebuffer, &skybox_uniforms, &skybox_obj, &skybox_shader_instance);
 
         // --- RENDER NAVE ---
         let ship_model = create_model_matrix(ship_position + model_offset, ship_scale, ship_rotation);
