@@ -1,3 +1,4 @@
+// main.rs
 use nalgebra_glm::{Vec3, Mat4, normalize};
 use minifb::{Key, Window, WindowOptions};
 use std::time::{Duration, Instant};
@@ -27,11 +28,11 @@ use shaders::{
 };
 use camera::Camera;
 use color::Color;
-use scene::{create_solar_system, SceneData, PlanetConfig}; // Importamos PlanetConfig también
+use scene::{create_solar_system, SceneData, PlanetConfig}; 
 use shaders::SkyboxShader;
 
 // ===================== ESTADOS DE LA VISTA =====================
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 enum ViewMode {
     SolarSystem,                  // Vista general orbitando
     Warp { target_index: usize }, // Vista enfocada en un planeta específico
@@ -86,6 +87,7 @@ fn render(framebuffer: &mut Framebuffer, uniforms: &Uniforms, obj: &Obj, shader:
     });
 }
 
+// Renderizado con Alpha (transparencia)
 fn render_alpha(framebuffer: &mut Framebuffer, uniforms: &Uniforms, obj: &Obj, shader: &dyn FragmentShader, z_bias: f32) {
     let (positions, normals, uvs) = obj.mesh_buffers();
     obj.for_each_face(|i0, i1, i2| {
@@ -118,7 +120,7 @@ fn main() {
     let frame_delay = Duration::from_millis(16);
 
     let mut framebuffer = Framebuffer::new(framebuffer_width, framebuffer_height);
-    let mut window = Window::new("Sistema Solar - WARP MODE", window_width, window_height, WindowOptions::default()).unwrap();
+    let mut window = Window::new("Sistema Solar - WARP ANIMATION", window_width, window_height, WindowOptions::default()).unwrap();
     window.set_position(200, 200);
     framebuffer.set_background_color(0x000000);
 
@@ -127,6 +129,9 @@ fn main() {
     let planet_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load planet");
     let rings_obj = Obj::load("assets/models/PlanetRing.obj").expect("Failed to load rings");
     let moon_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load moon");
+    
+    // Usaremos el modelo de skybox (esfera) también para la burbuja de Warp
+    let warp_bubble_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load warp bubble");
 
     let skybox_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load skybox cube");
     let t_posx = Texture::load("assets/skybox/posx.png");
@@ -157,26 +162,69 @@ fn main() {
     // 3. Inicializar Escena
     let scene_data = create_solar_system(&moon_obj);
 
-    // 4. Shader de la Nave
+    // 4. Shaders
+    // SHADER DE NAVE
     let ship_shader = ProceduralLayerShader {
         noise: NoiseParams { kind: NoiseType::Value, scale: 1.0, octaves: 1, lacunarity: 0.0, gain: 0.0, cell_size: 0.0, w1:0.0,w2:0.0,w3:0.0,w4:0.0, dist: VoronoiDistance::Euclidean, animate_time: false, time_speed: 0.0, animate_spin: false, spin_speed: 0.0, ring_swirl_amp: 0.0, ring_swirl_freq: 0.0, band_frequency: 0.0, band_contrast: 0.0, lat_shear: 0.0, turb_scale: 0.0, turb_octaves: 0, turb_lacunarity: 0.0, turb_gain: 0.0, turb_amp: 0.0, flow: FlowParams::default() },
         color_stops: vec![ColorStop{ threshold: 0.0, color: Color::from_hex(0xAAAAAA) }],
         color_hardness: 0.0, lighting_enabled: true, light_dir: normalize(&Vec3::new(0.5, 1.0, 1.0)), light_min: 0.2, light_max: 1.0, alpha_mode: AlphaMode::Opaque
     };
 
-    // 5. Configuración Inicial de Nave y Cámara
+    // 
+    // SHADER DE WARP (Hiperespacio / Desliespacio)
+    // Usamos Voronoi para celdas de energía y color azul eléctrico transparente
+    let warp_shader = ProceduralLayerShader {
+        noise: NoiseParams {
+            kind: NoiseType::Voronoi, // Efecto celular
+            scale: 0.8, 
+            octaves: 1, 
+            lacunarity: 2.0, 
+            gain: 0.5, 
+            cell_size: 1.0, // Celdas grandes
+            w1: 1.0, w2: 0.0, w3: 0.0, w4: 0.0, 
+            dist: VoronoiDistance::Manhattan, // Patrón geométrico agresivo
+            animate_time: true, 
+            time_speed: 2.0, // Movimiento rápido
+            animate_spin: true, 
+            spin_speed: 1.0,
+            ring_swirl_amp: 0.0, ring_swirl_freq: 0.0, band_frequency: 0.0, band_contrast: 0.0, lat_shear: 0.0, turb_scale: 0.0, turb_octaves: 0, turb_lacunarity: 0.0, turb_gain: 0.0, turb_amp: 0.0, flow: FlowParams::default()
+        },
+        color_stops: vec![
+            ColorStop { threshold: 0.0, color: Color::from_hex(0x001133) }, // Azul oscuro profundo
+            ColorStop { threshold: 0.4, color: Color::from_hex(0x0044AA) }, // Azul eléctrico
+            ColorStop { threshold: 0.8, color: Color::from_hex(0x00FFFF) }, // Cian brillante
+            ColorStop { threshold: 1.0, color: Color::from_hex(0xFFFFFF) }, // Núcleo blanco
+        ],
+        color_hardness: 0.1,
+        lighting_enabled: false, // Auto-iluminado
+        light_dir: Vec3::new(0.0, 1.0, 0.0), light_min: 1.0, light_max: 1.0,
+        // Transparencia basada en el umbral del ruido para ver a través
+        alpha_mode: AlphaMode::Threshold { threshold: 0.2, sharpness: 2.0, coverage_bias: 0.0, invert: false }
+    };
+
+    // 5. Configuración Inicial
     let default_ship_pos = Vec3::new(0.0, 50.0, 400.0);
     let mut ship_position = default_ship_pos; 
     let mut ship_rotation = Vec3::new(0.0, 0.0, PI); 
     
-    // ESTADO INICIAL WARP
     let mut view_mode = ViewMode::SolarSystem;
-    let warp_scale_factor = 10.0; // Factor de escala para que el planeta se vea grande en Warp
+    let warp_scale_factor = 10.0;
+
+    // --- VARIABLES PARA LA ANIMACIÓN DE WARP ---
+    let mut is_warping = false;
+    let mut warp_start_time: Option<Instant> = None;
+    let mut pending_target_index: Option<usize> = None;
+    let mut pending_return = false; // Si volvemos al sistema solar
+
+    // Duraciones de la animación
+    let warp_enter_duration = 1.5; // Segundos para entrar (burbuja crece)
+    let warp_travel_duration = 2.0; // Segundos viajando (burbuja palpitando)
+    let warp_total_duration = warp_enter_duration + warp_travel_duration; 
+    // La salida es instantánea al resetear, o podríamos animar el encogimiento al llegar (más complejo)
 
     let aspect = framebuffer_width as f32 / framebuffer_height as f32;
     let mut camera = Camera::new(Vec3::new(0.0, 15.0, 60.0), ship_position, aspect);
     
-    // Órbita de cámara
     let cam_back_dist: f32 = 40.0;
     let cam_height: f32 = 15.0;
     let cam_radius: f32 = (cam_back_dist * cam_back_dist + cam_height * cam_height).sqrt();
@@ -191,40 +239,87 @@ fn main() {
         if window.is_key_down(Key::Escape) { break; }
         let time_secs = start_time.elapsed().as_secs_f32();
 
-        // --- INPUT DE WARP (TELETRANSPORTE) ---
-        // Regresar al sistema solar completo
-        if window.is_key_pressed(Key::Backspace, minifb::KeyRepeat::No) {
-            view_mode = ViewMode::SolarSystem;
-            ship_position = default_ship_pos; 
-            ship_rotation = Vec3::new(0.0, 0.0, PI);
-        }
+        // --- INPUT ---
+        
+        // Solo procesar inputs de cambio de planeta si NO estamos ya en warp
+        if !is_warping {
+            // Regresar al sistema solar completo
+            if window.is_key_pressed(Key::Backspace, minifb::KeyRepeat::No) {
+                // Iniciamos secuencia de Warp de regreso
+                is_warping = true;
+                warp_start_time = Some(Instant::now());
+                pending_return = true;
+                pending_target_index = None;
+            }
 
-        // Ir a un planeta específico (Teclas 0 a 5)
-        let mut target_warp = None;
-        if window.is_key_pressed(Key::Key0, minifb::KeyRepeat::No) { target_warp = Some(0); } // Sol
-        if window.is_key_pressed(Key::Key1, minifb::KeyRepeat::No) { target_warp = Some(1); } // Tierra
-        if window.is_key_pressed(Key::Key2, minifb::KeyRepeat::No) { target_warp = Some(2); } // Marte
-        if window.is_key_pressed(Key::Key3, minifb::KeyRepeat::No) { target_warp = Some(3); } // Jupiter
-        if window.is_key_pressed(Key::Key4, minifb::KeyRepeat::No) { target_warp = Some(4); } // Saturno
-        if window.is_key_pressed(Key::Key5, minifb::KeyRepeat::No) { target_warp = Some(5); } // Urano
+            // Ir a un planeta específico (Teclas 0 a 5)
+            let mut target_warp = None;
+            if window.is_key_pressed(Key::Key0, minifb::KeyRepeat::No) { target_warp = Some(0); }
+            if window.is_key_pressed(Key::Key1, minifb::KeyRepeat::No) { target_warp = Some(1); }
+            if window.is_key_pressed(Key::Key2, minifb::KeyRepeat::No) { target_warp = Some(2); }
+            if window.is_key_pressed(Key::Key3, minifb::KeyRepeat::No) { target_warp = Some(3); }
+            if window.is_key_pressed(Key::Key4, minifb::KeyRepeat::No) { target_warp = Some(4); }
+            if window.is_key_pressed(Key::Key5, minifb::KeyRepeat::No) { target_warp = Some(5); }
 
-        if let Some(index) = target_warp {
-            if index < scene_data.planets.len() {
-                view_mode = ViewMode::Warp { target_index: index };
-                
-                // CAMBIO AQUÍ:
-                // Al hacer warp, movemos la nave frente al planeta.
-                let target_planet_scale = scene_data.planets[index].scale * warp_scale_factor;
-                
-                // Posición: en Z positivo
-                ship_position = Vec3::new(0.0, 0.0, target_planet_scale * 3.0);
-                
-                // Rotación: Mantenemos PI en Z (corrección de modelo) y agregamos PI en Y para girar 180 grados
-                ship_rotation = Vec3::new(0.0, PI, PI); 
+            if let Some(index) = target_warp {
+                if index < scene_data.planets.len() {
+                    // INICIAR WARP
+                    is_warping = true;
+                    warp_start_time = Some(Instant::now());
+                    pending_target_index = Some(index);
+                    pending_return = false;
+                }
             }
         }
 
-        // --- INPUT DE NAVE ---
+        // --- LOGICA DE ANIMACIÓN WARP ---
+        let mut warp_bubble_scale = 0.0;
+
+        if is_warping {
+            if let Some(start_t) = warp_start_time {
+                let elapsed_warp = start_t.elapsed().as_secs_f32();
+
+                // Fase 1: Entrada (La burbuja crece de 0 a cubrir la nave)
+                if elapsed_warp < warp_enter_duration {
+                    // Interpolación suave (Smoothstep o simple)
+                    let t = elapsed_warp / warp_enter_duration;
+                    warp_bubble_scale = t * t * (3.0 - 2.0 * t) * 15.0; // Crece hasta tamaño 15
+                } 
+                // Fase 2: Viaje (Mantener burbuja y hacer el cambio de escena oculto)
+                else if elapsed_warp < warp_total_duration {
+                    // Palpitar ligeramente
+                    warp_bubble_scale = 15.0 + (elapsed_warp * 10.0).sin() * 0.5;
+
+                    // JUSTO AQUÍ HACEMOS EL "TELETRANSPORTE" LÓGICO (a mitad del viaje)
+                    // Solo lo hacemos una vez (podríamos usar un flag, pero como es un estado continuo,
+                    // simplemente aseguramos que el ViewMode sea el correcto al final)
+                } 
+                // Fase 3: Salida (Terminar warp y encoger burbuja)
+                else {
+                    // APLICAR EL CAMBIO DE VISTA FINALMENTE
+                    if pending_return {
+                        view_mode = ViewMode::SolarSystem;
+                        ship_position = default_ship_pos;
+                        ship_rotation = Vec3::new(0.0, 0.0, PI);
+                    } else if let Some(idx) = pending_target_index {
+                        view_mode = ViewMode::Warp { target_index: idx };
+                        let target_planet_scale = scene_data.planets[idx].scale * warp_scale_factor;
+                        ship_position = Vec3::new(0.0, 0.0, target_planet_scale * 3.0);
+                        ship_rotation = Vec3::new(0.0, PI, PI); // Girar la nave
+                    }
+
+                    // Resetear flags
+                    is_warping = false;
+                    warp_start_time = None;
+                    // Opcional: Podríamos añadir una fase de "encogimiento" aquí, pero por ahora
+                    // al poner is_warping = false, la burbuja desaparece instantáneamente al llegar,
+                    // dando el efecto de "POP, llegamos".
+                }
+            }
+        }
+
+
+        // --- INPUT DE NAVE (Deshabilitado o reducido durante warp si quisieras) ---
         handle_input(&window, &mut ship_position, &mut ship_rotation, &mut ship_scale);
 
         // --- CÁLCULO DE CÁMARA ---
@@ -244,8 +339,17 @@ fn main() {
         let base_dir = base_offset / cam_radius;
         let base_pitch = base_dir.y.asin();
         let base_yaw = base_dir.x.atan2(base_dir.z);
-        let yaw = base_yaw + orbit_yaw;
-        let pitch = (base_pitch + orbit_pitch).clamp(-PI*0.49, PI*0.49);
+        
+        // Agregamos un poco de vibración a la cámara si estamos en warp
+        let mut shake_yaw = 0.0;
+        let mut shake_pitch = 0.0;
+        if is_warping {
+            shake_yaw = (time_secs * 20.0).sin() * 0.02;
+            shake_pitch = (time_secs * 15.0).cos() * 0.02;
+        }
+
+        let yaw = base_yaw + orbit_yaw + shake_yaw;
+        let pitch = (base_pitch + orbit_pitch + shake_pitch).clamp(-PI*0.49, PI*0.49);
         let final_offset = Vec3::new(
             cam_radius * yaw.sin() * pitch.cos(),
             cam_radius * pitch.sin(),
@@ -281,59 +385,64 @@ fn main() {
         };
         render(&mut framebuffer, &u_ship, &ship_obj, &ship_shader);
 
-        // --- RENDER PLANETAS (DEPENDIENDO DEL MODO) ---
-        match view_mode {
-            // Modo 1: Sistema Solar Completo
-            ViewMode::SolarSystem => {
-                for (i, planet) in scene_data.planets.iter().enumerate() {
-                    // Cálculo de órbita
-                    let angle = planet.orbit_offset + time_secs * planet.orbit_speed;
-                    let px = planet.dist_from_sun * angle.cos();
-                    let pz = planet.dist_from_sun * angle.sin();
-                    let translation = Vec3::new(px, 0.0, pz);
+        // --- RENDER WARP BUBBLE (Si está activa) ---
+        if is_warping && warp_bubble_scale > 0.1 {
+            // La burbuja rodea a la nave. Usamos ship_position
+            // Usamos rotation aleatoria basada en tiempo para que se vea caótica
+            let warp_rot = Vec3::new(time_secs, time_secs * 0.5, 0.0);
+            let warp_model = create_model_matrix(ship_position, warp_bubble_scale, warp_rot);
+            
+            let u_warp = Uniforms {
+                model_matrix: warp_model,
+                ..u_ship // Copiamos view/proj del ship
+            };
+            
+            // Usamos render_alpha para que sea transparente
+            // z_bias negativo para asegurar que envuelva visualmente si hay conflictos Z,
+            // aunque al ser transparente y grande, el orden de dibujado importa (dibujar al final es mejor)
+            render_alpha(&mut framebuffer, &u_warp, &warp_bubble_obj, &warp_shader, 0.0);
+        }
 
-                    // Dibujar líneas de órbita solo en modo sistema
-                    if planet.dist_from_sun > 0.1 {
-                        let u_orbit = Uniforms { model_matrix: Mat4::identity(), view_matrix, projection_matrix, screen_width: framebuffer_width as f32, screen_height: framebuffer_height as f32, time: 0.0, seed: 0, ring_a: 0.0, ring_b: 0.0, ring_plane_xy: false };
-                        render_orbit(&mut framebuffer, &u_orbit, planet.dist_from_sun, 128);
+        // --- RENDER PLANETAS (Solo si NO estamos en la fase densa del warp para ahorrar recursos, 
+        // o siempre si quieres que se vea como desaparecen) ---
+        
+        // Truco: Durante la fase intermedia del warp (cuando la esfera es grande), podríamos NO renderizar
+        // los planetas para simular que "salimos" del espacio normal.
+        let hide_universe = is_warping && warp_bubble_scale > 10.0; 
+
+        if !hide_universe {
+            match view_mode {
+                ViewMode::SolarSystem => {
+                    for (i, planet) in scene_data.planets.iter().enumerate() {
+                        let angle = planet.orbit_offset + time_secs * planet.orbit_speed;
+                        let px = planet.dist_from_sun * angle.cos();
+                        let pz = planet.dist_from_sun * angle.sin();
+                        let translation = Vec3::new(px, 0.0, pz);
+
+                        if planet.dist_from_sun > 0.1 {
+                            let u_orbit = Uniforms { model_matrix: Mat4::identity(), view_matrix, projection_matrix, screen_width: framebuffer_width as f32, screen_height: framebuffer_height as f32, time: 0.0, seed: 0, ring_a: 0.0, ring_b: 0.0, ring_plane_xy: false };
+                            render_orbit(&mut framebuffer, &u_orbit, planet.dist_from_sun, 128);
+                        }
+
+                        let scale_final = base_planet_scale * planet.scale;
+                        let rot_planet = Vec3::new(0.0, time_secs * planet.rotation_speed, 0.0);
+
+                        render_planet_system(&mut framebuffer, &uniforms_base(view_matrix, projection_matrix, framebuffer_width, framebuffer_height),
+                            planet, translation, scale_final, rot_planet, planet_offset,
+                            &planet_obj, &rings_obj, &scene_data, i, time_secs, ring_radius_x, ring_radius_z);
                     }
+                },
 
-                    // Escala y Rotación normal
-                    let scale_final = base_planet_scale * planet.scale;
+                ViewMode::Warp { target_index } => {
+                    let planet = &scene_data.planets[target_index];
+                    let translation = Vec3::new(0.0, 0.0, 0.0);
+                    let scale_final = base_planet_scale * planet.scale * warp_scale_factor;
                     let rot_planet = Vec3::new(0.0, time_secs * planet.rotation_speed, 0.0);
 
-                    // Renderizado centralizado
-                    render_planet_system(
-                        &mut framebuffer, 
-                        &uniforms_base(view_matrix, projection_matrix, framebuffer_width, framebuffer_height),
+                    render_planet_system(&mut framebuffer, &uniforms_base(view_matrix, projection_matrix, framebuffer_width, framebuffer_height),
                         planet, translation, scale_final, rot_planet, planet_offset,
-                        &planet_obj, &rings_obj, &scene_data, i, time_secs,
-                        ring_radius_x, ring_radius_z
-                    );
+                        &planet_obj, &rings_obj, &scene_data, target_index, time_secs, ring_radius_x, ring_radius_z);
                 }
-            },
-
-            // Modo 2: Warp (Un solo planeta, centrado y grande)
-            ViewMode::Warp { target_index } => {
-                let planet = &scene_data.planets[target_index];
-
-                // Posición forzada al centro (0,0,0)
-                let translation = Vec3::new(0.0, 0.0, 0.0);
-                
-                // Escala aumentada por el factor warp
-                let scale_final = base_planet_scale * planet.scale * warp_scale_factor;
-                
-                // Rotación sigue activa
-                let rot_planet = Vec3::new(0.0, time_secs * planet.rotation_speed, 0.0);
-
-                // Renderizado centralizado
-                render_planet_system(
-                    &mut framebuffer, 
-                    &uniforms_base(view_matrix, projection_matrix, framebuffer_width, framebuffer_height),
-                    planet, translation, scale_final, rot_planet, planet_offset,
-                    &planet_obj, &rings_obj, &scene_data, target_index, time_secs,
-                    ring_radius_x, ring_radius_z
-                );
             }
         }
 
