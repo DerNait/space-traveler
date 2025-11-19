@@ -232,39 +232,50 @@ fn eval_noise(p_obj_unit_in: Vec3, uniforms: &Uniforms, params: &NoiseParams) ->
 
 impl FragmentShader for ProceduralLayerShader {
     fn shade(&self, frag: &FragAttrs, uniforms: &Uniforms) -> (Color, f32) {
+        // Mantén ambas: posición de objeto cruda (para anillos/planos)
+        // y posición unitaria (para ruidos esféricos en planetas).
         let p_obj = frag.obj_pos;
-        let p_unit = if p_obj.magnitude() > 1e-6 { p_obj.normalize() } else { p_obj };
+        let p_unit = {
+            let mut q = p_obj;
+            let m = q.magnitude();
+            if m > 1e-6 { q /= m; }
+            q
+        };
 
+        // Elegimos cómo evaluar 'n' según el tipo de ruido
         let n = match self.noise.kind {
+            // Radial en OBJ: usa radio en el plano XZ/XY *sin normalizar el vector*
             NoiseType::RadialGradient { inner, outer, invert, bias, gamma } => {
-                // === LÓGICA DE ANILLOS ===
-                // Seleccionamos ejes según el plano.
-                // Si el modelo original del anillo está en XZ (lo normal en OBJ de anillos),
-                // entonces usamos X y Z. La rotación del planeta/anillo la maneja la matriz Model.
                 let (px, py, a, b) = if uniforms.ring_plane_xy {
                     (p_obj.x, p_obj.y, uniforms.ring_a.max(1e-6), uniforms.ring_b.max(1e-6))
                 } else {
                     (p_obj.x, p_obj.z, uniforms.ring_a.max(1e-6), uniforms.ring_b.max(1e-6))
                 };
-                
-                // Normalizamos la distancia usando las dimensiones reales del objeto (a, b)
-                // Esto devuelve un valor de 0 (centro) a 1 (borde exterior del anillo)
+
+                // Radio elíptico normalizado: mantiene el grosor del anillo QUIETO
                 let r_ell = ((px / a).powi(2) + (py / b).powi(2)).sqrt();
-                
+
                 let i = inner.clamp(0.0, 0.999);
                 let o = outer.clamp(i + 1e-6, 1.0);
                 let mut rn = ((r_ell - i) / (o - i)).clamp(0.0, 1.0);
-                
+
+                // Curvatura radial; NO aplicar wobble aquí
                 rn = shape_bias_gamma(rn, bias, gamma);
-                if invert { rn } else { 1.0 - rn }
+                let v = if invert { rn } else { 1.0 - rn };
+                v.clamp(0.0, 1.0)
             }
+
+            // Radial en UV nativos del mesh
             NoiseType::UVRadialGradient { center, invert, bias, gamma } => {
                 let du = frag.uv.x - center.x;
                 let dv = frag.uv.y - center.y;
-                let mut rn = ((du*du + dv*dv).sqrt() / 0.5).clamp(0.0, 1.0);
+                let max_r = 0.5_f32; // desde (0.5,0.5) al borde de la textura
+                let mut rn = ((du*du + dv*dv).sqrt() / max_r).clamp(0.0, 1.0);
                 rn = shape_bias_gamma(rn, bias, gamma);
-                if invert { rn } else { 1.0 - rn }
+                let v = if invert { rn } else { 1.0 - rn };
+                v.clamp(0.0, 1.0)
             }
+            // Radial en UV "sintéticos" generados desde OBJ (centrado en el planeta)
             NoiseType::UVRadialGradientObj { plane, radius_max, invert, bias, gamma } => {
                 let (px, py) = match plane {
                     RingPlane::XY => (p_obj.x, p_obj.y),
@@ -272,29 +283,43 @@ impl FragmentShader for ProceduralLayerShader {
                     RingPlane::YZ => (p_obj.y, p_obj.z),
                 };
                 let r = (px*px + py*py).sqrt();
-                let mut rn = (r / radius_max.max(1e-6)).clamp(0.0, 1.0);
+                let mut rn = (r / radius_max.max(1e-6)).clamp(0.0, 1.0); // 0 centro, 1 borde
                 rn = shape_bias_gamma(rn, bias, gamma);
-                if invert { rn } else { 1.0 - rn }
+                let v = if invert { rn } else { 1.0 - rn };
+                v.clamp(0.0, 1.0)
             }
+            // El resto de tipos se evalúan como antes (usando p_unit)
             _ => eval_noise(p_unit, uniforms, &self.noise),
         };
 
+        // Color base por palette
         let mut col = sample_color_stops(&self.color_stops, n, self.color_hardness);
 
-        // Tinte angular para los anillos
+        // Tinte angular que GIRA (sin tocar el radio rn): solo para anillos RadialGradient
         if let NoiseType::RadialGradient { .. } = self.noise.kind {
+            // Recalcula ángulo elíptico estable (usa x/a, y/b)
             let (px, py, a, b) = if uniforms.ring_plane_xy {
                 (p_obj.x, p_obj.y, uniforms.ring_a.max(1e-6), uniforms.ring_b.max(1e-6))
             } else {
                 (p_obj.x, p_obj.z, uniforms.ring_a.max(1e-6), uniforms.ring_b.max(1e-6))
             };
-            let mut theta = (py/b).atan2(px/a);
-            if self.noise.animate_spin { theta += uniforms.time * self.noise.spin_speed; }
+            let ex = (px / a);
+            let ey = (py / b);
+            let mut theta = ey.atan2(ex); // [-π, π]
+            if self.noise.animate_spin {
+                theta += uniforms.time * self.noise.spin_speed;
+            }
+            // u ∈ [0,1] desde el ángulo
             let u = 0.5 + theta / (2.0 * std::f32::consts::PI);
-            let grain = (u * self.noise.ring_swirl_freq * 2.0 * std::f32::consts::PI).sin() * 0.5 + 0.5;
-            let amp = self.noise.ring_swirl_amp;
-            let tint = (1.0 - amp) + (2.0 * amp) * grain;
-            col = col * tint;
+            // “grano” angular que viaja alrededor
+            let grain = (u * self.noise.ring_swirl_freq * 2.0 * std::f32::consts::PI).sin() * 0.5 + 0.5; // [0,1]
+
+            // Tinte sutil (no cambia geometría ni rn)
+            let amp = self.noise.ring_swirl_amp; // sugerencia: 0.03..0.08
+            let shade_lo = 1.0 - amp;
+            let shade_hi = 1.0 + amp;
+            let tint = shade_lo + (shade_hi - shade_lo) * grain; // ~ [1-amp, 1+amp]
+            col = col * tint; // si tu Color no clampa, puedes añadir clamp por componente aquí
         }
 
         if self.lighting_enabled {
@@ -302,18 +327,20 @@ impl FragmentShader for ProceduralLayerShader {
             let mul = self.light_min + (self.light_max - self.light_min) * l;
             col = col * mul;
         }
+        let a = alpha_from_noise(n, &self.alpha_mode);
+        (col, a)
+    }
+}
 
-        let alpha = match self.alpha_mode {
-            AlphaMode::Opaque => 1.0,
-            AlphaMode::Constant(a) => a.clamp(0.0, 1.0),
-            AlphaMode::Threshold { threshold, sharpness, coverage_bias, invert } => {
-                let thr = (threshold - coverage_bias).clamp(0.0, 1.0);
-                let k = sharpness.max(1.0);
-                let a = ((n - thr) * k).clamp(0.0, 1.0);
-                if invert { 1.0 - a } else { a }
-            }
-        };
-
-        (col, alpha)
+fn alpha_from_noise(n: f32, mode: &AlphaMode) -> f32 {
+    match mode {
+        AlphaMode::Opaque => 1.0,
+        AlphaMode::Constant(a) => a.clamp(0.0, 1.0),
+        AlphaMode::Threshold { threshold, sharpness, coverage_bias, invert } => {
+            let thr = (threshold - coverage_bias).clamp(0.0, 1.0);
+            let k = (*sharpness).max(1.0);
+            let a = ((n - thr) * k).clamp(0.0, 1.0);
+            if *invert { 1.0 - a } else { a }
+        }
     }
 }
