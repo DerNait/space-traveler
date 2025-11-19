@@ -21,20 +21,20 @@ pub fn line(a: &Vertex, b: &Vertex) -> Vec<Fragment> {
 
     let mut err = if dx > dy { dx / 2 } else { -dy / 2 };
 
-    // Longitud total para t (paramétrico seguro, evita división por cero)
     let total_dx = (x1 as f32 - start.x).abs();
     let total_dy = (y1 as f32 - start.y).abs();
     let total_len = (total_dx.powi(2) + total_dy.powi(2)).sqrt().max(1e-6);
 
     loop {
-        // Distancia actual desde el inicio (en float)
         let cur_dx = (x0 as f32 - start.x).abs();
         let cur_dy = (y0 as f32 - start.y).abs();
         let cur_len = (cur_dx.powi(2) + cur_dy.powi(2)).sqrt();
         let t = (cur_len / total_len).clamp(0.0, 1.0);
 
         let z = start.z + (end.z - start.z) * t;
-        fragments.push(Fragment::new(x0 as f32, y0 as f32, Color::new(255, 255, 255), z));
+        
+        // --- CORRECCIÓN AQUÍ: Se agregó 1.0 al final ---
+        fragments.push(Fragment::new(x0 as f32, y0 as f32, Color::new(255, 255, 255), z, 1.0));
 
         if x0 == x1 && y0 == y1 { break; }
 

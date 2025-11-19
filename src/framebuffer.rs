@@ -1,5 +1,3 @@
-// framebuffer.rs
-
 pub struct Framebuffer {
     pub width: usize,
     pub height: usize,
@@ -30,7 +28,6 @@ impl Framebuffer {
         }
     }
 
-    /// Versión optimizada: recibe el color directamente
     pub fn point(&mut self, x: usize, y: usize, depth: f32, color: u32) {
         if x < self.width && y < self.height {
             let index = y * self.width + x;
@@ -41,7 +38,47 @@ impl Framebuffer {
         }
     }
 
-    // Estas las dejo por compatibilidad, por si las usas en otro lado
+    // ESTE ES EL MÉTODO QUE TE FALTABA
+    pub fn draw_rgba(&mut self, x: usize, y: usize, depth: f32, color: u32, alpha: f32) {
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        let index = y * self.width + x;
+
+        // Z-Check
+        if self.zbuffer[index] > depth {
+            // Si es opaco, dibujamos directo
+            if alpha >= 1.0 {
+                self.buffer[index] = color;
+                self.zbuffer[index] = depth;
+            } else if alpha > 0.0 {
+                // Blending básico
+                let bg_color = self.buffer[index];
+                
+                // Extraer componentes del fondo
+                let bg_r = ((bg_color >> 16) & 0xFF) as f32;
+                let bg_g = ((bg_color >> 8) & 0xFF) as f32;
+                let bg_b = (bg_color & 0xFF) as f32;
+
+                // Extraer componentes del nuevo color
+                let fg_r = ((color >> 16) & 0xFF) as f32;
+                let fg_g = ((color >> 8) & 0xFF) as f32;
+                let fg_b = (color & 0xFF) as f32;
+
+                // Mezcla lineal
+                let r = (fg_r * alpha + bg_r * (1.0 - alpha)) as u32;
+                let g = (fg_g * alpha + bg_g * (1.0 - alpha)) as u32;
+                let b = (fg_b * alpha + bg_b * (1.0 - alpha)) as u32;
+
+                let final_color = (r << 16) | (g << 8) | b;
+
+                self.buffer[index] = final_color;
+                // Actualizamos Z incluso si es transparente para que ocluya objetos detrás
+                self.zbuffer[index] = depth; 
+            }
+        }
+    }
+
     pub fn set_background_color(&mut self, color: u32) {
         self.background_color = color;
     }
