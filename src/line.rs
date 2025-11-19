@@ -1,10 +1,9 @@
-use crate::fragment::Fragment;
 use crate::vertex::Vertex;
 use crate::color::Color;
+use crate::framebuffer::Framebuffer;
 
-pub fn line(a: &Vertex, b: &Vertex) -> Vec<Fragment> {
-    let mut fragments = Vec::new();
-
+// Ya no devolvemos Vec<Fragment>, dibujamos directo
+pub fn line(a: &Vertex, b: &Vertex, framebuffer: &mut Framebuffer) {
     let start = a.transformed_position;
     let end = b.transformed_position;
 
@@ -33,8 +32,8 @@ pub fn line(a: &Vertex, b: &Vertex) -> Vec<Fragment> {
 
         let z = start.z + (end.z - start.z) * t;
         
-        // --- CORRECCIÓN AQUÍ: Se agregó 1.0 al final ---
-        fragments.push(Fragment::new(x0 as f32, y0 as f32, Color::new(255, 255, 255), z, 1.0));
+        // Dibujamos directo en el framebuffer
+        framebuffer.point(x0 as usize, y0 as usize, z, 0x505064); // Gris azulado fijo para orbitas
 
         if x0 == x1 && y0 == y1 { break; }
 
@@ -48,6 +47,4 @@ pub fn line(a: &Vertex, b: &Vertex) -> Vec<Fragment> {
             y0 += sy;
         }
     }
-
-    fragments
 }

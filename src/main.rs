@@ -5,7 +5,7 @@ use std::f32::consts::PI;
 
 mod framebuffer;
 mod triangle;
-mod line; // Necesario para dibujar las órbitas
+mod line; 
 mod vertex;
 mod obj;
 mod color;
@@ -18,7 +18,7 @@ use framebuffer::Framebuffer;
 use vertex::Vertex;
 use obj::Obj;
 use triangle::triangle_with_shader;
-use line::line; // Importamos la función de línea
+use line::line; 
 use shaders::{
     vertex_shader, Uniforms, FragmentShader,
     ProceduralLayerShader, NoiseParams, NoiseType, VoronoiDistance,
@@ -27,7 +27,7 @@ use shaders::{
 use camera::Camera;
 use color::Color;
 
-// ===================== ESTRUCTURAS DE CONFIGURACIÓN =====================
+// ===================== CONFIGURACIÓN =====================
 
 struct PlanetConfig {
     dist_from_sun: f32,
@@ -46,23 +46,21 @@ struct PlanetConfig {
 struct Moon {
     obj: Obj,
     scale_rel: f32,
-    orbit_px: f32,      // Radio órbita relativo al padre
+    orbit_px: f32,      
     orbit_speed: f32,
     phase0: f32,
     tilt: Vec3,
     shader: Box<dyn FragmentShader + Send + Sync>,
     seed: i32,
-    parent_index: usize, // Índice del planeta en el vector de planetas
+    parent_index: usize, 
 }
 
 impl Moon {
     fn model_matrix(&self, planet_pos: Vec3, planet_scale: f32, t: f32) -> Mat4 {
         let angle = self.phase0 + t * self.orbit_speed;
-        let dist = self.orbit_px * planet_scale * 4.0; 
-        
+        let dist = planet_scale + (self.orbit_px * 0.5); 
         let dx = angle.cos() * dist;
         let dz = angle.sin() * dist;
-
         let tr = Vec3::new(planet_pos.x + dx, planet_pos.y, planet_pos.z + dz);
         let spin = Vec3::new(self.tilt.x, self.tilt.y + t * 0.5, self.tilt.z);
         create_model_matrix(tr, planet_scale * self.scale_rel, spin)
@@ -89,24 +87,19 @@ fn create_model_matrix(translation: Vec3, scale: f32, rotation: Vec3) -> Mat4 {
 
 fn render_orbit(framebuffer: &mut Framebuffer, uniforms: &Uniforms, radius: f32, segments: usize) {
     let mut prev_vertex: Option<Vertex> = None;
+    let first_vertex_pos = Vec3::new(radius, 0.0, 0.0); // Para cerrar el círculo si quisieras
+
     for i in 0..=segments {
         let angle = (i as f32 / segments as f32) * 2.0 * PI;
         let pos = Vec3::new(radius * angle.cos(), 0.0, radius * angle.sin());
         let v = Vertex::new_with_color(pos, Color::new(60, 80, 100));
         
-        // Usamos model matrix identidad para la órbita
         let mut orbit_uniforms = Uniforms { model_matrix: Mat4::identity(), ..*uniforms };
 
         if let Some(transformed_v) = vertex_shader(&v, &orbit_uniforms) {
             if let Some(prev) = prev_vertex {
-                let fragments = line(&prev, &transformed_v);
-                for frag in fragments {
-                    let x = frag.position.x as usize;
-                    let y = frag.position.y as usize;
-                    if x < framebuffer.width && y < framebuffer.height {
-                        framebuffer.point(x, y, frag.depth, frag.color.to_hex());
-                    }
-                }
+                // Dibujamos la línea directamente al framebuffer
+                line(&prev, &transformed_v, framebuffer);
             }
             prev_vertex = Some(transformed_v);
         } else { prev_vertex = None; }
@@ -129,19 +122,18 @@ fn render(framebuffer: &mut Framebuffer, uniforms: &Uniforms, obj: &Obj, shader:
         let v2_opt = vertex_shader(&Vertex::new(p2, n2, t2), uniforms);
 
         if let (Some(v0), Some(v1), Some(v2)) = (v0_opt, v1_opt, v2_opt) {
-            let fragments = triangle_with_shader(&v0, &v1, &v2, shader, uniforms);
-            for frag in fragments {
-                let x = frag.position.x as usize;
-                let y = frag.position.y as usize;
-                if x < framebuffer.width && y < framebuffer.height {
-                    framebuffer.draw_rgba(x, y, frag.depth, frag.color.to_hex(), frag.alpha);
-                }
-            }
+            // Pasamos el framebuffer directamente
+            triangle_with_shader(&v0, &v1, &v2, shader, uniforms, framebuffer);
         }
     });
 }
 
 fn render_alpha(framebuffer: &mut Framebuffer, uniforms: &Uniforms, obj: &Obj, shader: &dyn FragmentShader, z_bias: f32) {
+    // Nota: para alpha con z_bias en early-z, necesitamos ajustar un poco la lógica o simplemente
+    // confiar en que el z_bias se aplica en el vertex shader.
+    // Para mantener simpleza, usaremos la misma función triangle_with_shader pero modificaremos
+    // los vértices transformados ligeramente antes de enviarlos.
+    
     let (positions, normals, uvs) = obj.mesh_buffers();
     obj.for_each_face(|i0, i1, i2| {
         let p0 = positions[i0]; let p1 = positions[i1]; let p2 = positions[i2];
@@ -156,15 +148,13 @@ fn render_alpha(framebuffer: &mut Framebuffer, uniforms: &Uniforms, obj: &Obj, s
         let v1_opt = vertex_shader(&Vertex::new(p1, n1, t1), uniforms);
         let v2_opt = vertex_shader(&Vertex::new(p2, n2, t2), uniforms);
 
-        if let (Some(v0), Some(v1), Some(v2)) = (v0_opt, v1_opt, v2_opt) {
-            let fragments = triangle_with_shader(&v0, &v1, &v2, shader, uniforms);
-            for frag in fragments {
-                let x = frag.position.x as usize;
-                let y = frag.position.y as usize;
-                if x < framebuffer.width && y < framebuffer.height {
-                    framebuffer.draw_rgba(x, y, frag.depth + z_bias, frag.color.to_hex(), frag.alpha);
-                }
-            }
+        if let (Some(mut v0), Some(mut v1), Some(mut v2)) = (v0_opt, v1_opt, v2_opt) {
+            // Aplicar bias manual a la profundidad transformada
+            v0.transformed_position.z += z_bias;
+            v1.transformed_position.z += z_bias;
+            v2.transformed_position.z += z_bias;
+            
+            triangle_with_shader(&v0, &v1, &v2, shader, uniforms, framebuffer);
         }
     });
 }
@@ -179,17 +169,16 @@ fn main() {
     let frame_delay = Duration::from_millis(16);
 
     let mut framebuffer = Framebuffer::new(framebuffer_width, framebuffer_height);
-    let mut window = Window::new("Sistema Solar Completo", window_width, window_height, WindowOptions::default()).unwrap();
+    let mut window = Window::new("Sistema Solar Optimizado", window_width, window_height, WindowOptions::default()).unwrap();
     window.set_position(200, 200);
     framebuffer.set_background_color(0x000000);
 
-    // ===== Carga de Modelos =====
     let ship_obj = Obj::load("assets/models/Pelican.obj").expect("Failed to load ship");
     let planet_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load planet");
     let rings_obj = Obj::load("assets/models/PlanetRing.obj").expect("Failed to load rings");
     let moon_obj = Obj::load("assets/models/Planet.obj").expect("Failed to load moon");
 
-    // ===== Escalas Base =====
+    // Escalas Base
     let (min_v, max_v) = ship_obj.bounds();
     let center = (min_v + max_v) * 0.5;
     let max_extent = (max_v - min_v).x.abs().max((max_v - min_v).y.abs()).max((max_v - min_v).z.abs());
@@ -207,22 +196,18 @@ fn main() {
     let ring_radius_x = (ext.x.abs() / 2.0).max(1e-6);
     let ring_radius_y = (ext.y.abs() / 2.0).max(1e-6);
 
-    // ===== SHADERS =====
-
+    // ===== SHADERS (Mismo setup que antes) =====
     // 0. SOL
     let sun_shader = ProceduralLayerShader {
         noise: NoiseParams { 
-            kind: NoiseType::BandedGas, scale: 1.0, octaves: 16, lacunarity: 2.2, gain: 0.52, cell_size: 0.35, w1: 1.0, w2: 0.0, w3:0.0, w4:0.0, dist: VoronoiDistance::Euclidean, 
-            animate_time: false, time_speed: 0.0, animate_spin: true, spin_speed: 0.12,
-            ring_swirl_amp: 0.0, ring_swirl_freq: 8.0, band_frequency: 20.0, band_contrast: 0.05, lat_shear: 0.05, turb_scale: 8.0, turb_octaves: 4, turb_lacunarity: 2.0, turb_gain: 0.55, turb_amp: 1.4,
-            flow: FlowParams { enabled: true, flow_scale: 2.5, strength: 0.09, time_speed: 0.7, jets_base_speed: 0.04, jets_frequency: 5.0, phase_amp: 2.0 }
+            kind: NoiseType::BandedGas, scale: 1.0, octaves: 6, lacunarity: 2.0, gain: 0.5, cell_size: 1.0,
+            w1: 1.0, w2: 0.0, w3:0.0, w4:0.0, dist: VoronoiDistance::Euclidean, animate_time: true, time_speed: 0.1, animate_spin: true, spin_speed: 0.05,
+            ring_swirl_amp: 0.0, ring_swirl_freq: 1.0, band_frequency: 12.0, band_contrast: 0.1, lat_shear: 0.0,
+            turb_scale: 6.0, turb_octaves: 4, turb_lacunarity: 2.0, turb_gain: 0.5, turb_amp: 1.2,
+            flow: FlowParams { enabled: true, flow_scale: 2.5, strength: 0.15, time_speed: 0.6, jets_base_speed: 0.0, jets_frequency: 1.0, phase_amp: 2.0 }
         },
         color_stops: vec![
-            ColorStop{ threshold: 0.00, color: Color::from_hex(0xA33600) },
-            ColorStop{ threshold: 0.25, color: Color::from_hex(0x7A1400) },
-            ColorStop{ threshold: 0.50, color: Color::from_hex(0xE04800) },
-            ColorStop{ threshold: 0.75, color: Color::from_hex(0xFFC640) },
-            ColorStop{ threshold: 1.00, color: Color::from_hex(0xFFF9D0) },
+            ColorStop{ threshold: 0.0, color: Color::from_hex(0xFF4500) }, ColorStop{ threshold: 0.5, color: Color::from_hex(0xFFA500) }, ColorStop{ threshold: 1.0, color: Color::from_hex(0xFFFFE0) },
         ],
         color_hardness: 0.15, lighting_enabled: false, light_dir: Vec3::new(0.0, 1.0, 0.0), light_min: 1.0, light_max: 1.0, alpha_mode: AlphaMode::Opaque
     };
@@ -256,7 +241,7 @@ fn main() {
         alpha_mode: AlphaMode::Threshold { threshold: 0.60, sharpness: 6.0, coverage_bias: 0.05, invert: false },
     };
 
-    // 3. JUPITER (GASEOSO)
+    // 3. JUPITER
     let jupiter_shader = ProceduralLayerShader {
         noise: NoiseParams {
             kind: NoiseType::BandedGas, scale: 1.0, octaves: 4, lacunarity: 2.0, gain: 0.5, cell_size: 0.0, w1:0.0,w2:0.0,w3:0.0,w4:0.0, dist: VoronoiDistance::Euclidean,
@@ -317,39 +302,43 @@ fn main() {
         color_hardness: 0.0, lighting_enabled: true, light_dir: normalize(&Vec3::new(0.5, 1.0, 1.0)), light_min: 0.2, light_max: 1.0, alpha_mode: AlphaMode::Opaque
     };
 
-    // Vectores de acceso
     let shaders = vec![ &sun_shader, &terrain_shader, &mars_shader, &jupiter_shader, &saturn_shader, &uranus_shader ];
     let ring_shaders = vec![ None, None, None, None, Some(&saturn_rings_shader), Some(&uranus_rings_shader) ];
     let cloud_shaders = vec![ None, Some(&clouds_shader), Some(&mars_clouds_shader), None, None, None ];
 
-    // ===== SISTEMA SOLAR (Configuración) =====
     let solar_system = vec![
-        // 0. SOL (Centro)
+        // 0. SOL
         PlanetConfig { dist_from_sun: 0.0,   orbit_speed: 0.0,  orbit_offset: 0.0, scale: 20.0, rotation_speed: 0.05, shader_index: 0, has_rings: false, ring_shader_index: None, ring_tilt: Vec3::new(0.0,0.0,0.0), has_atmosphere: false, atmosphere_shader_index: None },
-        // 1. TIERRA (Cerca)
-        PlanetConfig { dist_from_sun: 60.0,  orbit_speed: 0.4,  orbit_offset: 0.0, scale: 5.0,  rotation_speed: 0.5,  shader_index: 1, has_rings: false, ring_shader_index: None, ring_tilt: Vec3::new(0.0,0.0,0.0), has_atmosphere: true,  atmosphere_shader_index: Some(1) },
+        // 1. TIERRA
+        PlanetConfig { dist_from_sun: 100.0,  orbit_speed: 0.4,  orbit_offset: 0.0, scale: 5.0,  rotation_speed: 0.5,  shader_index: 1, has_rings: false, ring_shader_index: None, ring_tilt: Vec3::new(0.0,0.0,0.0), has_atmosphere: true,  atmosphere_shader_index: Some(1) },
         // 2. MARTE
-        PlanetConfig { dist_from_sun: 85.0,  orbit_speed: 0.3,  orbit_offset: 2.0, scale: 4.0,  rotation_speed: 0.4,  shader_index: 2, has_rings: false, ring_shader_index: None, ring_tilt: Vec3::new(0.0,0.0,0.0), has_atmosphere: true,  atmosphere_shader_index: Some(2) },
-        // 3. JUPITER (Grande, Gaseoso)
-        PlanetConfig { dist_from_sun: 120.0, orbit_speed: 0.2,  orbit_offset: 4.0, scale: 14.0, rotation_speed: 0.3,  shader_index: 3, has_rings: false, ring_shader_index: None, ring_tilt: Vec3::new(0.0,0.0,0.0), has_atmosphere: false, atmosphere_shader_index: None },
-        // 4. SATURNO (Anillos)
-        PlanetConfig { dist_from_sun: 160.0, orbit_speed: 0.15, orbit_offset: 1.0, scale: 11.0, rotation_speed: 0.2,  shader_index: 4, has_rings: true,  ring_shader_index: Some(4), ring_tilt: Vec3::new(0.3, 0.0, 0.1), has_atmosphere: false, atmosphere_shader_index: None },
-        // 5. URANO (Lejos)
-        PlanetConfig { dist_from_sun: 200.0, orbit_speed: 0.1,  orbit_offset: 5.5, scale: 9.0,  rotation_speed: 0.1,  shader_index: 5, has_rings: true,  ring_shader_index: Some(5), ring_tilt: Vec3::new(1.3, 0.0, 0.0), has_atmosphere: false, atmosphere_shader_index: None },
+        PlanetConfig { dist_from_sun: 140.0,  orbit_speed: 0.3,  orbit_offset: 2.0, scale: 4.0,  rotation_speed: 0.4,  shader_index: 2, has_rings: false, ring_shader_index: None, ring_tilt: Vec3::new(0.0,0.0,0.0), has_atmosphere: true,  atmosphere_shader_index: Some(2) },
+        // 3. JUPITER
+        PlanetConfig { dist_from_sun: 210.0, orbit_speed: 0.2,  orbit_offset: 4.0, scale: 14.0, rotation_speed: 0.3,  shader_index: 3, has_rings: false, ring_shader_index: None, ring_tilt: Vec3::new(0.0,0.0,0.0), has_atmosphere: false, atmosphere_shader_index: None },
+        // 4. SATURNO
+        PlanetConfig { dist_from_sun: 280.0, orbit_speed: 0.15, orbit_offset: 1.0, scale: 11.0, rotation_speed: 0.2,  shader_index: 4, has_rings: true,  ring_shader_index: Some(4), ring_tilt: Vec3::new(0.3, 0.0, 0.1), has_atmosphere: false, atmosphere_shader_index: None },
+        // 5. URANO
+        PlanetConfig { dist_from_sun: 350.0, orbit_speed: 0.1,  orbit_offset: 5.5, scale: 9.0,  rotation_speed: 0.1,  shader_index: 5, has_rings: true,  ring_shader_index: Some(5), ring_tilt: Vec3::new(1.3, 0.0, 0.0), has_atmosphere: false, atmosphere_shader_index: None },
     ];
 
-    // Lunas (Orbitan a la Tierra - Índice 1 en el vector nuevo)
-    let moon_shader_rocky = ProceduralLayerShader {
+    // Lunas (Duplicadas para evitar errores de ownership)
+    let moon_shader_earth = ProceduralLayerShader {
         noise: NoiseParams { kind: NoiseType::Voronoi, scale: 2.6, octaves: 3, lacunarity: 2.0, gain: 0.5, cell_size: 0.4, w1:1.0, w2:1.0, w3:1.0, w4:0.0, dist: VoronoiDistance::Euclidean, animate_time: false, time_speed: 0.0, animate_spin: false, spin_speed: 0.0, ring_swirl_amp: 0.0, ring_swirl_freq: 0.0, band_frequency: 0.0, band_contrast: 0.0, lat_shear: 0.0, turb_scale: 0.0, turb_octaves: 0, turb_lacunarity: 0.0, turb_gain: 0.0, turb_amp: 0.0, flow: FlowParams::default() },
         color_stops: vec![ ColorStop{threshold:0.25, color:Color::from_hex(0x5E5347)}, ColorStop{threshold:0.85, color:Color::from_hex(0xCBB79F)} ],
         color_hardness: 0.25, lighting_enabled: true, light_dir: normalize(&Vec3::new(0.25, 0.6, -1.0)), light_min: 0.35, light_max: 1.05, alpha_mode: AlphaMode::Opaque
     };
+    let moon_shader_jupiter = ProceduralLayerShader {
+        noise: NoiseParams { kind: NoiseType::Voronoi, scale: 2.6, octaves: 3, lacunarity: 2.0, gain: 0.5, cell_size: 0.4, w1:1.0, w2:1.0, w3:1.0, w4:0.0, dist: VoronoiDistance::Euclidean, animate_time: false, time_speed: 0.0, animate_spin: false, spin_speed: 0.0, ring_swirl_amp: 0.0, ring_swirl_freq: 0.0, band_frequency: 0.0, band_contrast: 0.0, lat_shear: 0.0, turb_scale: 0.0, turb_octaves: 0, turb_lacunarity: 0.0, turb_gain: 0.0, turb_amp: 0.0, flow: FlowParams::default() },
+        color_stops: vec![ ColorStop{threshold:0.25, color:Color::from_hex(0x5E5347)}, ColorStop{threshold:0.85, color:Color::from_hex(0xCBB79F)} ],
+        color_hardness: 0.25, lighting_enabled: true, light_dir: normalize(&Vec3::new(0.25, 0.6, -1.0)), light_min: 0.35, light_max: 1.05, alpha_mode: AlphaMode::Opaque
+    };
+
     let moons: Vec<Moon> = vec![
-        Moon { obj: moon_obj.clone(), scale_rel: 0.25, orbit_px: 15.0, orbit_speed: 1.5, phase0: 0.0, tilt: Vec3::new(0.05, 0.0, 0.05), shader: Box::new(moon_shader_rocky), seed: 8888, parent_index: 1 }
+        Moon { obj: moon_obj.clone(), scale_rel: 0.25, orbit_px: 2.0, orbit_speed: 1.5, phase0: 0.0, tilt: Vec3::new(0.05, 0.0, 0.05), shader: Box::new(moon_shader_earth), seed: 8888, parent_index: 1 }, 
+        Moon { obj: moon_obj.clone(), scale_rel: 0.20, orbit_px: 2.5, orbit_speed: 0.8, phase0: 2.0, tilt: Vec3::new(0.0, 0.0, 0.0), shader: Box::new(moon_shader_jupiter), seed: 7777, parent_index: 3 }
     ];
 
-    // ===== NAVE & CAMARA =====
-    let mut ship_position = Vec3::new(0.0, 30.0, 280.0); // Lejos para ver el sistema
+    let mut ship_position = Vec3::new(0.0, 50.0, 350.0); 
     let mut ship_rotation = Vec3::new(0.0, 0.0, PI); 
     let aspect = framebuffer_width as f32 / framebuffer_height as f32;
     let mut camera = Camera::new(Vec3::new(0.0, 15.0, 60.0), ship_position, aspect);
@@ -415,6 +404,7 @@ fn main() {
             let pz = planet.dist_from_sun * angle.sin();
             let translation = Vec3::new(px, 0.0, pz);
 
+            // Dibujar órbita
             if planet.dist_from_sun > 0.1 {
                 let u_orbit = Uniforms { model_matrix: Mat4::identity(), view_matrix, projection_matrix, screen_width: framebuffer_width as f32, screen_height: framebuffer_height as f32, time: 0.0, seed: 0, ring_a: 0.0, ring_b: 0.0, ring_plane_xy: false };
                 render_orbit(&mut framebuffer, &u_orbit, planet.dist_from_sun, 128);
@@ -444,8 +434,13 @@ fn main() {
                 if let Some(ring_idx) = planet.ring_shader_index {
                      if let Some(ring_shader) = ring_shaders[ring_idx] {
                         let ring_model = create_model_matrix(translation + planet_offset * planet.scale, scale_final * 1.2, planet.ring_tilt);
+                        // IMPORTANTE: Pasamos ring_radius_x y y al uniform
                         let u_rings = Uniforms { 
-                            model_matrix: ring_model, ring_a: ring_radius_x, ring_b: ring_radius_y, ring_plane_xy: true, ..uniforms 
+                            model_matrix: ring_model, 
+                            ring_a: ring_radius_x, 
+                            ring_b: ring_radius_y, 
+                            ring_plane_xy: false, // En 3D usualmente es XZ (false). Si tu modelo es XY, pon true.
+                            ..uniforms 
                         };
                         render(&mut framebuffer, &u_rings, &rings_obj, ring_shader);
                      }

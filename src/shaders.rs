@@ -4,7 +4,6 @@ use crate::vertex::Vertex;
 use crate::color::Color;
 use crate::noise;
 
-/// Uniforms compartidos
 pub struct Uniforms {
     pub model_matrix: Mat4,
     pub view_matrix:  Mat4,
@@ -14,10 +13,10 @@ pub struct Uniforms {
 
     pub time: f32,
     pub seed: i32,
-    // Parámetros específicos para anillos elípticos
-    pub ring_a: f32,
-    pub ring_b: f32,
-    pub ring_plane_xy: bool,
+    // Parámetros para anillos
+    pub ring_a: f32, // Radio mayor del modelo
+    pub ring_b: f32, // Radio menor del modelo
+    pub ring_plane_xy: bool, // true = plano XY, false = plano XZ
 }
 
 pub struct FragAttrs {
@@ -36,7 +35,7 @@ pub fn vertex_shader(vertex: &Vertex, uniforms: &Uniforms) -> Option<Vertex> {
     let world_pos = uniforms.model_matrix * position;
     let view_pos = uniforms.view_matrix * world_pos;
 
-    if view_pos.z >= 0.0 { return None; }
+    if view_pos.z >= 0.0 { return None; } // Culling
 
     let clip_pos = uniforms.projection_matrix * view_pos;
     let w = clip_pos.w;
@@ -67,7 +66,7 @@ pub fn vertex_shader(vertex: &Vertex, uniforms: &Uniforms) -> Option<Vertex> {
     })
 }
 
-// ==================== LÓGICA DE RUIDO ====================
+// ==================== RUIDO ====================
 
 #[derive(Clone, Copy)]
 pub enum RingPlane { XY, XZ, YZ }
@@ -89,11 +88,8 @@ pub struct FlowParams {
     pub flow_scale: f32, pub strength: f32, pub time_speed: f32,
     pub jets_base_speed: f32, pub jets_frequency: f32, pub phase_amp: f32,
 }
-
 impl Default for FlowParams {
-    fn default() -> Self {
-        Self { enabled: false, flow_scale: 2.0, strength: 0.0, time_speed: 0.0, jets_base_speed: 0.0, jets_frequency: 1.0, phase_amp: 0.0 }
-    }
+    fn default() -> Self { Self { enabled: false, flow_scale: 2.0, strength: 0.0, time_speed: 0.0, jets_base_speed: 0.0, jets_frequency: 1.0, phase_amp: 0.0 } }
 }
 
 #[derive(Clone)]
@@ -222,6 +218,7 @@ fn eval_noise(p_obj_unit_in: Vec3, uniforms: &Uniforms, params: &NoiseParams) ->
         NoiseType::Voronoi => noise::voronoi_3proj(p, params.scale, params.cell_size, params.w1, params.w2, params.w3, params.w4, params.dist, uniforms.seed ^ 0xC2B2, t).clamp(0.0, 1.0),
         NoiseType::BandedGas => eval_bands_core(lon, lat, uniforms, params),
         NoiseType::RadialGradient { inner, outer, invert, bias, gamma } => {
+            // Gradiente esférico base (no anillos)
             let r = (p.x*p.x + p.z*p.z).sqrt();
             let i = inner.max(1e-6);
             let o = outer.max(i + 1e-6);
@@ -240,15 +237,24 @@ impl FragmentShader for ProceduralLayerShader {
 
         let n = match self.noise.kind {
             NoiseType::RadialGradient { inner, outer, invert, bias, gamma } => {
-                 let (px, py, a, b) = if uniforms.ring_plane_xy {
+                // === LÓGICA DE ANILLOS ===
+                // Seleccionamos ejes según el plano.
+                // Si el modelo original del anillo está en XZ (lo normal en OBJ de anillos),
+                // entonces usamos X y Z. La rotación del planeta/anillo la maneja la matriz Model.
+                let (px, py, a, b) = if uniforms.ring_plane_xy {
                     (p_obj.x, p_obj.y, uniforms.ring_a.max(1e-6), uniforms.ring_b.max(1e-6))
                 } else {
                     (p_obj.x, p_obj.z, uniforms.ring_a.max(1e-6), uniforms.ring_b.max(1e-6))
                 };
+                
+                // Normalizamos la distancia usando las dimensiones reales del objeto (a, b)
+                // Esto devuelve un valor de 0 (centro) a 1 (borde exterior del anillo)
                 let r_ell = ((px / a).powi(2) + (py / b).powi(2)).sqrt();
+                
                 let i = inner.clamp(0.0, 0.999);
                 let o = outer.clamp(i + 1e-6, 1.0);
                 let mut rn = ((r_ell - i) / (o - i)).clamp(0.0, 1.0);
+                
                 rn = shape_bias_gamma(rn, bias, gamma);
                 if invert { rn } else { 1.0 - rn }
             }
@@ -275,6 +281,7 @@ impl FragmentShader for ProceduralLayerShader {
 
         let mut col = sample_color_stops(&self.color_stops, n, self.color_hardness);
 
+        // Tinte angular para los anillos
         if let NoiseType::RadialGradient { .. } = self.noise.kind {
             let (px, py, a, b) = if uniforms.ring_plane_xy {
                 (p_obj.x, p_obj.y, uniforms.ring_a.max(1e-6), uniforms.ring_b.max(1e-6))
