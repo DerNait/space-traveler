@@ -88,7 +88,7 @@ pub fn create_solar_system(moon_obj: &Obj) -> SceneData {
 
             // Base de ruido
             scale: 1.0,
-            octaves: 16,
+            octaves: 8,
             lacunarity: 2.2,
             gain: 0.52,
             cell_size: 0.35,
@@ -492,9 +492,9 @@ pub fn create_solar_system(moon_obj: &Obj) -> SceneData {
 
     let moons = vec![
         // Luna de la Tierra (index 1) - Muy cerca
-        Moon { obj: moon_obj.clone(), scale_rel: 0.25, orbit_px: 2.0, orbit_speed: 1.5, phase0: 0.0, tilt: Vec3::new(0.05, 0.0, 0.05), shader: Box::new(moon_shader), seed: 8888, parent_index: 1 },
+        Moon { obj: moon_obj.clone(), scale_rel: 0.25, orbit_px: 3.0, orbit_speed: 1.5, phase0: 0.0, tilt: Vec3::new(0.05, 0.0, 0.05), shader: Box::new(moon_shader), seed: 8888, parent_index: 1 },
         // Luna de Júpiter (index 3) - Un poco mas lejos
-        Moon { obj: moon_obj.clone(), scale_rel: 0.20, orbit_px: 3.0, orbit_speed: 0.8, phase0: 2.0, tilt: Vec3::new(0.0, 0.0, 0.0), shader: Box::new(
+        Moon { obj: moon_obj.clone(), scale_rel: 0.20, orbit_px: 4.0, orbit_speed: 0.8, phase0: 2.0, tilt: Vec3::new(0.0, 0.0, 0.0), shader: Box::new(
              ProceduralLayerShader {
                 noise: NoiseParams { kind: NoiseType::Voronoi, scale: 3.0, octaves: 3, lacunarity: 2.0, gain: 0.5, cell_size: 0.4, w1:1.0, w2:1.0, w3:1.0, w4:0.0, dist: VoronoiDistance::Euclidean, animate_time: false, time_speed: 0.0, animate_spin: false, spin_speed: 0.0, ring_swirl_amp: 0.0, ring_swirl_freq: 0.0, band_frequency: 0.0, band_contrast: 0.0, lat_shear: 0.0, turb_scale: 0.0, turb_octaves: 0, turb_lacunarity: 0.0, turb_gain: 0.0, turb_amp: 0.0, flow: FlowParams::default() },
                 color_stops: vec![ ColorStop{threshold:0.25, color:Color::from_hex(0xAAAAAA)}, ColorStop{threshold:0.85, color:Color::from_hex(0xFFFFFF)} ],
