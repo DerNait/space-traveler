@@ -56,9 +56,9 @@ impl Ship {
             position,
             rotation: Vec3::new(0.0, 0.0, 0.0), 
             speed: 0.0,
-            max_speed: 5.0,     
-            acceleration: 0.1,  
-            friction: 0.05,     
+            max_speed: 5.0,      
+            acceleration: 0.1,   
+            friction: 0.05,      
             turn_speed: 0.04, // Valor bajo para que se note el "peso" y el derrape
         }
     }
@@ -83,7 +83,6 @@ fn create_model_matrix(translation: Vec3, scale: f32, rotation: Vec3) -> Mat4 {
     let rz = Mat4::new(cos_z,-sin_z,0.0,0.0, sin_z,cos_z,0.0,0.0, 0.0,0.0,1.0,0.0, 0.0,0.0,0.0,1.0);
     
     // Orden de multiplicacion: Z * Y * X (Roll * Yaw * Pitch)
-    // Esto es importante para que el banking no afecte la dirección de la nariz incorrectamente
     let rotation_matrix = rz * ry * rx; 
     
     let transform_matrix = Mat4::new(scale,0.0,0.0,translation.x, 0.0,scale,0.0,translation.y, 0.0,0.0,scale,translation.z, 0.0,0.0,0.0,1.0);
@@ -227,20 +226,33 @@ fn main() {
     let mut view_mode = ViewMode::SolarSystem;
     let warp_scale_factor = 10.0;
 
-    // --- VARIABLES WARP ---
+    // --- VARIABLES WARP (MODIFICADO) ---
     let mut is_warping = false;
     let mut warp_start_time: Option<Instant> = None;
     let mut pending_target_index: Option<usize> = None;
     let mut pending_return = false;
-    let warp_enter_duration = 1.5;
-    let warp_travel_duration = 2.0;
-    let warp_total_duration = warp_enter_duration + warp_travel_duration; 
+    
+    // Nueva bandera para controlar el cambio de escena a mitad de animación
+    let mut has_switched_scene = false;
+
+    // --- TIEMPOS DE LA SECUENCIA CINEMATICA ---
+    let warp_enter_duration = 1.5;  // Burbuja crece
+    let warp_fade_in = 0.5;         // Pantalla se vuelve blanca
+    let warp_hold_white = 1.0;      // Pantalla se queda blanca (cambio escena)
+    let warp_fade_out = 0.5;        // Blanco desaparece
+    let warp_exit_duration = 2.0;   // Burbuja se encoge
+    
+    // Tiempo total acumulado
+    let warp_total_duration = warp_enter_duration + warp_fade_in + warp_hold_white + warp_fade_out + warp_exit_duration; 
 
     // --- VARIABLES CÁMARA ORBITAL ---
     let aspect = framebuffer_width as f32 / framebuffer_height as f32;
     let mut camera = Camera::new(Vec3::new(0.0, 15.0, 60.0), ship.position, aspect);
     
-    let mut orbit_yaw: f32 = PI; 
+    // CAMBIO IMPORTANTE: orbit_yaw en 0.0 en lugar de PI
+    // Con PI (180 grados), la cámara está frente a la nave mirando hacia atrás (viendo tu cara).
+    // Con 0.0, la cámara está detrás de la nave mirando hacia el frente (hacia el sistema).
+    let mut orbit_yaw: f32 = 0.0; 
     let mut orbit_pitch: f32 = 0.0;
     let orbit_sens: f32 = 0.06; 
     let cam_dist: f32 = 60.0;
@@ -266,6 +278,7 @@ fn main() {
 
         let mut shake = Vec3::new(0.0, 0.0, 0.0);
         if is_warping {
+            // Reducimos el shake si estamos en fase de pantalla blanca para que sea más sutil
             shake = Vec3::new((time_secs * 30.0).sin(), (time_secs * 25.0).cos(), 0.0) * 0.5;
         }
 
@@ -280,25 +293,15 @@ fn main() {
         let target_pitch = -target_dir.y.asin(); 
 
         // --- CÁLCULO DEL BANKING (INCLINACIÓN LATERAL) ---
-        // Calculamos la diferencia entre el ángulo deseado y el actual
         let mut turn_diff = target_yaw - ship.rotation.y;
-        
-        // Normalizamos la diferencia para que siempre sea el camino más corto (-PI a PI)
         while turn_diff > PI { turn_diff -= 2.0 * PI; }
         while turn_diff < -PI { turn_diff += 2.0 * PI; }
 
-        // Definimos la inclinación máxima (ej. 45 grados = PI/4)
         let max_roll = PI / 4.0; 
-        
-        // El roll objetivo es proporcional a qué tan fuerte estamos girando.
-        // Usamos -turn_diff porque si giramos a la izquierda (yaw cambia), queremos inclinarnos a la izquierda (roll)
         let target_roll = -turn_diff.clamp(-1.0, 1.0) * max_roll;
 
-        // Aplicamos las rotaciones con Lerp
         ship.rotation.y = lerp_angle(ship.rotation.y, target_yaw, ship.turn_speed);
         ship.rotation.x = lerp_angle(ship.rotation.x, target_pitch, ship.turn_speed);
-        
-        // Lerp para el Roll (Eje Z) - Usamos un factor suave (0.1) para que tenga "inercia"
         ship.rotation.z = ship.rotation.z + (target_roll - ship.rotation.z) * 0.1; 
 
         // 2. Velocidad
@@ -333,6 +336,7 @@ fn main() {
                 warp_start_time = Some(Instant::now());
                 pending_return = true;
                 pending_target_index = None;
+                has_switched_scene = false; 
             }
             let mut target_warp = None;
             if window.is_key_pressed(Key::Key0, minifb::KeyRepeat::No) { target_warp = Some(0); }
@@ -348,37 +352,80 @@ fn main() {
                     warp_start_time = Some(Instant::now());
                     pending_target_index = Some(index);
                     pending_return = false;
+                    has_switched_scene = false; 
                 }
             }
         }
 
-        // --- ANIMACIÓN WARP ---
+        // --- ANIMACIÓN WARP & WHITE SCREEN ---
         let mut warp_bubble_scale = 0.0;
+        let mut white_screen_alpha = 0.0;
+
         if is_warping {
             if let Some(start_t) = warp_start_time {
-                let elapsed_warp = start_t.elapsed().as_secs_f32();
-                if elapsed_warp < warp_enter_duration {
-                    let t = elapsed_warp / warp_enter_duration;
-                    warp_bubble_scale = t * t * (3.0 - 2.0 * t) * 15.0;
-                } else if elapsed_warp < warp_total_duration {
-                    warp_bubble_scale = 15.0 + (elapsed_warp * 10.0).sin() * 0.5;
-                    ship.speed = ship.max_speed * 2.0; 
-                } else {
-                    if pending_return {
-                        view_mode = ViewMode::SolarSystem;
-                        ship.position = default_ship_pos;
-                        ship.speed = 0.0; 
-                        ship.rotation = Vec3::new(0.0, 0.0, 0.0); 
-                        orbit_yaw = PI; orbit_pitch = 0.0; 
-                    } else if let Some(idx) = pending_target_index {
-                        view_mode = ViewMode::Warp { target_index: idx };
-                        let target_planet_scale = scene_data.planets[idx].scale * warp_scale_factor;
-                        ship.position = Vec3::new(0.0, 0.0, target_planet_scale * 3.0);
-                        ship.rotation = Vec3::new(0.0, PI, 0.0); 
-                        ship.speed = 0.0;
+                let elapsed = start_t.elapsed().as_secs_f32();
+
+                // 1. FASE ENTRADA (Burbuja crece)
+                if elapsed < warp_enter_duration {
+                    let t = elapsed / warp_enter_duration;
+                    warp_bubble_scale = t * t * (3.0 - 2.0 * t) * 15.0; // Easing
+                    ship.speed = ship.max_speed * 2.0;
+
+                // 2. FASE FADE IN (Pantalla se vuelve blanca)
+                } else if elapsed < (warp_enter_duration + warp_fade_in) {
+                    warp_bubble_scale = 15.0; // Burbuja al máximo
+                    ship.speed = ship.max_speed * 3.0;
+                    let t = (elapsed - warp_enter_duration) / warp_fade_in;
+                    white_screen_alpha = t.clamp(0.0, 1.0);
+
+                // 3. FASE HOLD WHITE (Pantalla blanca total - CAMBIO DE ESCENA)
+                } else if elapsed < (warp_enter_duration + warp_fade_in + warp_hold_white) {
+                    warp_bubble_scale = 15.0;
+                    white_screen_alpha = 1.0;
+                    ship.speed = 0.0; // Detenemos la nave en el "limbo"
+
+                    // ¡¡MOMENTO DE TELETRANSPORTE OCULTO!!
+                    if !has_switched_scene {
+                        if pending_return {
+                            view_mode = ViewMode::SolarSystem;
+                            ship.position = default_ship_pos;
+                            ship.speed = 0.0; 
+                            ship.rotation = Vec3::new(0.0, 0.0, 0.0); 
+                            orbit_yaw = PI; orbit_pitch = 0.0; 
+                        } else if let Some(idx) = pending_target_index {
+                            view_mode = ViewMode::Warp { target_index: idx };
+                            let target_planet_scale = scene_data.planets[idx].scale * warp_scale_factor;
+                            
+                            // Distancia aumentada * 8.0
+                            ship.position = Vec3::new(0.0, 0.0, target_planet_scale * 8.0);
+                            
+                            // Nave mirando hacia el planeta (-Z)
+                            ship.rotation = Vec3::new(0.0, 0.0, 0.0); 
+                            ship.speed = 0.0;
+                        }
+                        has_switched_scene = true;
                     }
+
+                // 4. FASE FADE OUT (Blanco desvanece, revela burbuja aún grande)
+                } else if elapsed < (warp_enter_duration + warp_fade_in + warp_hold_white + warp_fade_out) {
+                    warp_bubble_scale = 15.0;
+                    let t = (elapsed - (warp_enter_duration + warp_fade_in + warp_hold_white)) / warp_fade_out;
+                    white_screen_alpha = 1.0 - t.clamp(0.0, 1.0);
+
+                // 5. FASE SALIDA (Burbuja se encoge)
+                } else if elapsed < warp_total_duration {
+                    white_screen_alpha = 0.0;
+                    let t = (elapsed - (warp_total_duration - warp_exit_duration)) / warp_exit_duration;
+                    let shrink = 1.0 - t;
+                    warp_bubble_scale = (shrink * shrink) * 15.0;
+                
+                // FIN
+                } else {
                     is_warping = false;
                     warp_start_time = None;
+                    warp_bubble_scale = 0.0;
+                    has_switched_scene = false;
+                    white_screen_alpha = 0.0;
                 }
             }
         }
@@ -387,6 +434,12 @@ fn main() {
         framebuffer.clear();
         let view_matrix = camera.view_matrix();
         let projection_matrix = camera.projection_matrix();
+
+        // Determinar factor de distancia de lunas (3.0 si es Warp, 1.0 si es Solar)
+        let moon_dist_factor = match view_mode {
+            ViewMode::Warp { .. } => 4.0, // Lunas 4 veces más lejos en modo individual
+            _ => 1.0,
+        };
 
         // 1. SKYBOX
         let skybox_pos = camera.position;
@@ -420,7 +473,9 @@ fn main() {
         }
 
         // 4. PLANETAS
-        let hide_universe = is_warping && warp_bubble_scale > 10.0; 
+        // Ocultamos el universo SOLO si la pantalla está 100% blanca o la burbuja es muy grande
+        let hide_universe = (is_warping && white_screen_alpha >= 0.99) || (is_warping && warp_bubble_scale > 50.0); 
+        
         if !hide_universe {
             match view_mode {
                 ViewMode::SolarSystem => {
@@ -440,7 +495,7 @@ fn main() {
 
                         render_planet_system(&mut framebuffer, &uniforms_base(view_matrix, projection_matrix, framebuffer_width, framebuffer_height),
                             planet, translation, scale_final, rot_planet, planet_offset,
-                            &planet_obj, &rings_obj, &scene_data, i, time_secs, ring_radius_x, ring_radius_z);
+                            &planet_obj, &rings_obj, &scene_data, i, time_secs, ring_radius_x, ring_radius_z, moon_dist_factor);
                     }
                 },
 
@@ -452,7 +507,33 @@ fn main() {
 
                     render_planet_system(&mut framebuffer, &uniforms_base(view_matrix, projection_matrix, framebuffer_width, framebuffer_height),
                         planet, translation, scale_final, rot_planet, planet_offset,
-                        &planet_obj, &rings_obj, &scene_data, target_index, time_secs, ring_radius_x, ring_radius_z);
+                        &planet_obj, &rings_obj, &scene_data, target_index, time_secs, ring_radius_x, ring_radius_z, moon_dist_factor);
+                }
+            }
+        }
+
+        // --- POST PROCESO: WHITE FLASH ---
+        if white_screen_alpha > 0.0 {
+            // Mezclamos blanco sobre todo el framebuffer
+            let alpha_int = (white_screen_alpha * 255.0) as u32;
+            if alpha_int >= 255 {
+                // Optimización: Si es totalmente blanco, llenamos directo
+                framebuffer.buffer.fill(0xFFFFFF);
+            } else {
+                // Blending manual
+                let inv_alpha = 255 - alpha_int;
+                for pixel in framebuffer.buffer.iter_mut() {
+                    let r = (*pixel >> 16) & 0xFF;
+                    let g = (*pixel >> 8) & 0xFF;
+                    let b = *pixel & 0xFF;
+
+                    // Mezcla lineal: Color * (1-alpha) + Blanco * alpha
+                    // Blanco * alpha = 255 * alpha = alpha_int
+                    let nr = (r * inv_alpha / 255) + alpha_int;
+                    let ng = (g * inv_alpha / 255) + alpha_int;
+                    let nb = (b * inv_alpha / 255) + alpha_int;
+
+                    *pixel = (nr << 16) | (ng << 8) | nb;
                 }
             }
         }
@@ -476,7 +557,8 @@ fn render_planet_system(
     framebuffer: &mut Framebuffer, base_uniforms: &Uniforms,
     planet: &PlanetConfig, translation: Vec3, scale_final: f32, rotation: Vec3, planet_offset: Vec3,
     planet_obj: &Obj, rings_obj: &Obj, scene_data: &SceneData, 
-    planet_index: usize, time_secs: f32, ring_rad_x: f32, ring_rad_z: f32
+    planet_index: usize, time_secs: f32, ring_rad_x: f32, ring_rad_z: f32,
+    moon_dist_mult: f32 // Nuevo parámetro para separar lunas
 ) {
     let model = create_model_matrix(translation + planet_offset * planet.scale, scale_final, rotation);
     let uniforms = Uniforms {
@@ -511,7 +593,26 @@ fn render_planet_system(
 
     for m in &scene_data.moons {
         if m.parent_index == planet_index {
-            let moon_model = m.model_matrix(translation, scale_final, time_secs);
+            // TRUCO PARA SEPARAR LUNAS:
+            // Calculamos la matriz de modelo original de la luna
+            let mut moon_model = m.model_matrix(translation, scale_final, time_secs);
+            
+            // Extraemos la posición de la luna (Columna 3)
+            let mx = moon_model[(0, 3)];
+            let my = moon_model[(1, 3)];
+            let mz = moon_model[(2, 3)];
+
+            // Calculamos el vector desde el centro del planeta a la luna
+            let dx = mx - translation.x;
+            let dy = my - translation.y;
+            let dz = mz - translation.z;
+
+            // Aplicamos el multiplicador de distancia EXTRA
+            // (Si moon_dist_mult es 1.0, no pasa nada. Si es > 1.0, se aleja)
+            moon_model[(0, 3)] = translation.x + dx * moon_dist_mult;
+            moon_model[(1, 3)] = translation.y + dy * moon_dist_mult;
+            moon_model[(2, 3)] = translation.z + dz * moon_dist_mult;
+
             let u_moon = Uniforms {
                 model_matrix: moon_model, time: time_secs, seed: m.seed,
                 ..uniforms
