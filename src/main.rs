@@ -271,6 +271,21 @@ fn main() {
         if window.is_key_down(Key::K) { orbit_pitch -= orbit_sens; }
         orbit_pitch = orbit_pitch.clamp(-PI/2.5, PI/2.5); 
 
+        // --- NUEVO: CÁMARA CINEMÁTICA AUTOMÁTICA (ESPACIO) ---
+        if window.is_key_down(Key::Space) {
+            // 1. Obtenemos el ángulo desde el centro del mundo (0,0) hacia la nave.
+            //    Al usar solo 'ship.position.x' y 'z', obtenemos la dirección en el plano orbital.
+            let base_angle = ship.position.x.atan2(ship.position.z);
+            
+            // 2. Asignamos DIRECTAMENTE ese ángulo al yaw de la cámara.
+            //    Esto coloca la cámara "detrás" de la nave (más lejos del centro)
+            //    mirando hacia el centro (0,0,0).
+            orbit_yaw = base_angle; 
+            
+            // 3. Ajustamos un poco el pitch para una vista superior cinematográfica
+            orbit_pitch = -0.2;
+        }
+
         let cam_x = cam_dist * orbit_yaw.sin() * orbit_pitch.cos();
         let cam_y = cam_dist * orbit_pitch.sin();
         let cam_z = cam_dist * orbit_yaw.cos() * orbit_pitch.cos();

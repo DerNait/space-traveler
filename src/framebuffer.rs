@@ -86,4 +86,36 @@ impl Framebuffer {
     pub fn set_current_color(&mut self, color: u32) {
         self.current_color = color;
     }
+
+    #[inline(always)]
+    pub fn set_pixel_unchecked(&mut self, x: usize, y: usize, color: u32) {
+        // Safety: Solo usar si estamos seguros que x,y están dentro del buffer
+        let index = y * self.width + x;
+        unsafe {
+            *self.buffer.get_unchecked_mut(index) = color;
+        }
+    }
+    
+    // Método para leer el color de fondo para blending (sin checks)
+    #[inline(always)]
+    pub fn get_pixel_unchecked(&self, x: usize, y: usize) -> u32 {
+        let index = y * self.width + x;
+        unsafe { *self.buffer.get_unchecked(index) }
+    }
+    
+    // Actualizar Z-Buffer sin checks
+    #[inline(always)]
+    pub fn set_depth_unchecked(&mut self, x: usize, y: usize, depth: f32) {
+        let index = y * self.width + x;
+        unsafe {
+            *self.zbuffer.get_unchecked_mut(index) = depth;
+        }
+    }
+    
+    // Leer Z-Buffer sin checks
+    #[inline(always)]
+    pub fn get_depth_unchecked(&self, x: usize, y: usize) -> f32 {
+        let index = y * self.width + x;
+        unsafe { *self.zbuffer.get_unchecked(index) }
+    }
 }
