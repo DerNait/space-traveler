@@ -24,7 +24,7 @@ use obj::Obj;
 use triangle::triangle_with_shader;
 use line::line; 
 use shaders::{
-    vertex_shader, Uniforms, FragmentShader, ProceduralLayerShader, NoiseParams, NoiseType, FlowParams, ColorStop, AlphaMode, VoronoiDistance
+    vertex_shader, Uniforms, FragmentShader, ProceduralLayerShader, NoiseParams, NoiseType, FlowParams, ColorStop, AlphaMode, VoronoiDistance, TextureShader
 };
 use camera::Camera;
 use color::Color;
@@ -213,6 +213,14 @@ fn main() {
     let t_posz = Texture::load("assets/skybox/negz1.png");
     let t_negz = Texture::load("assets/skybox/posz.png");
 
+    let t_ship = Texture::load("assets/models/Pelican-Textures.png");
+    let ship_shader = TextureShader {
+        texture: &t_ship,
+        light_dir: normalize(&Vec3::new(0.5, 1.0, 1.0)),
+        ambient: 0.2,
+        diffuse: 0.8,
+    };
+
     // 2. Cálculos de Escala
     let (min_v, max_v) = ship_obj.bounds();
     let center = (min_v + max_v) * 0.5;
@@ -235,11 +243,11 @@ fn main() {
     let scene_data = create_solar_system(&moon_obj);
 
     // 4. Shaders
-    let ship_shader = ProceduralLayerShader {
+    /* let ship_shader = ProceduralLayerShader {
         noise: NoiseParams { kind: NoiseType::Value, scale: 1.0, octaves: 1, lacunarity: 0.0, gain: 0.0, cell_size: 0.0, w1:0.0,w2:0.0,w3:0.0,w4:0.0, dist: VoronoiDistance::Euclidean, animate_time: false, time_speed: 0.0, animate_spin: false, spin_speed: 0.0, ring_swirl_amp: 0.0, ring_swirl_freq: 0.0, band_frequency: 0.0, band_contrast: 0.0, lat_shear: 0.0, turb_scale: 0.0, turb_octaves: 0, turb_lacunarity: 0.0, turb_gain: 0.0, turb_amp: 0.0, flow: FlowParams::default() },
         color_stops: vec![ColorStop{ threshold: 0.0, color: Color::from_hex(0xAAAAAA) }],
         color_hardness: 0.0, lighting_enabled: true, light_dir: normalize(&Vec3::new(0.5, 1.0, 1.0)), light_min: 0.2, light_max: 1.0, alpha_mode: AlphaMode::Opaque
-    };
+    }; */
 
     let warp_shader = ProceduralLayerShader {
         noise: NoiseParams {

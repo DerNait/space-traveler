@@ -419,3 +419,29 @@ impl<'a> FragmentShader for SkyboxShader<'a> {
     }
 }
 
+pub struct TextureShader<'a> {
+    pub texture: &'a Texture,
+    pub light_dir: Vec3,
+    pub ambient: f32,   // Luz base para que no sea negro total en la sombra
+    pub diffuse: f32,   // Intensidad de la luz directa
+}
+
+impl<'a> FragmentShader for TextureShader<'a> {
+    fn shade(&self, frag: &FragAttrs, _uniforms: &Uniforms) -> (Color, f32) {
+        // 1. Muestrear el color base de la textura usando las UVs interpoladas
+        let base_color = self.texture.get_color(frag.uv.x, frag.uv.y);
+
+        // 2. Calcular iluminación básica (Lambert)
+        // El producto punto entre la normal y la luz
+        let diffuse_intensity = dot(&frag.normal, &self.light_dir).max(0.0);
+        
+        // 3. Combinar ambiente + difusa
+        let total_light = self.ambient + (self.diffuse * diffuse_intensity);
+        
+        // 4. Aplicar la luz al color
+        let final_color = base_color * total_light;
+
+        // Retornamos el color y alpha 1.0 (opaco)
+        (final_color, 1.0)
+    }
+}
